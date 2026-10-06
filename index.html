@@ -1,0 +1,205 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Temperature Trainer</title>
+<style>
+  :root {
+    --bg: #f5f7fa; --card: #fff; --text: #1d2733; --muted: #6b7785;
+    --accent: #2f6fed; --border: #dde3ea;
+    --good: #1f9d55; --ok: #d98a00; --bad: #d64545;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12171d; --card: #1b232c; --text: #e6ebf0; --muted: #8a97a5;
+      --accent: #5b8cff; --border: #2c3743;
+      --good: #3ac177; --ok: #f0a92e; --bad: #f06a6a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+    display: flex; justify-content: center; padding: 16px;
+  }
+  main { width: 100%; max-width: 520px; display: grid; gap: 14px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .formula { text-align: center; }
+  .formula .main { font-size: 1.25rem; font-weight: 600; }
+  .formula .sub { color: var(--muted); font-size: .9rem; margin-top: 4px; }
+  .toggle { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  button {
+    font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); padding: 10px 14px;
+  }
+  button.active, button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .question { text-align: center; }
+  .prompt { color: var(--muted); font-size: .9rem; }
+  .temp { font-size: 3.5rem; font-weight: 700; margin: 4px 0 12px; }
+  .answer { display: flex; gap: 8px; justify-content: center; }
+  input {
+    font: inherit; font-size: 1.4rem; width: 8em; text-align: center; padding: 8px;
+    border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  }
+  .result { min-height: 5.5em; margin-top: 12px; }
+  .verdict { font-size: 1.3rem; font-weight: 700; }
+  .detail { color: var(--muted); }
+  .good { color: var(--good); } .ok { color: var(--ok); } .bad { color: var(--bad); }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; text-align: center; }
+  .stats b { display: block; font-size: 1.4rem; }
+  .stats span { color: var(--muted); font-size: .75rem; }
+  .history { display: flex; align-items: flex-end; gap: 3px; height: 60px; margin-top: 12px; }
+  .history i { flex: 1; min-height: 3px; border-radius: 2px; background: var(--muted); }
+  .history i.good { background: var(--good); } .history i.ok { background: var(--ok); } .history i.bad { background: var(--bad); }
+  .foot { display: flex; justify-content: space-between; color: var(--muted); font-size: .8rem; margin-top: 8px; }
+  .foot button { padding: 2px 8px; font-size: .8rem; }
+</style>
+</head>
+<body>
+<main>
+  <div class="card formula">
+    <div class="main" id="formula"></div>
+    <div class="sub" id="trick"></div>
+  </div>
+
+  <div class="toggle">
+    <button id="m-cf" class="active">°C → °F</button>
+    <button id="m-fc">°F → °C</button>
+  </div>
+
+  <div class="card question">
+    <div class="prompt" id="prompt"></div>
+    <div class="temp" id="temp"></div>
+    <form class="answer" id="form">
+      <input id="guess" type="text" inputmode="decimal" autocomplete="off" autofocus>
+      <button class="primary" id="go">Check</button>
+    </form>
+    <div class="result" id="result"></div>
+  </div>
+
+  <div class="card">
+    <div class="stats">
+      <div><b id="s-n">0</b><span>answered</span></div>
+      <div><b id="s-avg">–</b><span>avg error</span></div>
+      <div><b id="s-close">–</b><span>within 3°</span></div>
+      <div><b id="s-streak">0</b><span>streak (≤3°)</span></div>
+    </div>
+    <div class="history" id="history" title="Recent errors (newest on right)"></div>
+    <div class="foot"><span id="mode-label"></span><button id="reset">Reset stats</button></div>
+  </div>
+</main>
+
+<script>
+const MODES = {
+  cf: {
+    from: "°C", to: "°F", range: [-25, 45],
+    formula: "°F = °C × 9/5 + 32",
+    trick: "Shortcut: double it, subtract 10%, add 32 (or just double + 30 for a rough guess)",
+    convert: c => c * 9 / 5 + 32,
+  },
+  fc: {
+    from: "°F", to: "°C", range: [-10, 115],
+    formula: "°C = (°F − 32) × 5/9",
+    trick: "Shortcut: subtract 30, then halve it (a bit high) — or subtract 32, halve, minus 10%",
+    convert: f => (f - 32) * 5 / 9,
+  },
+};
+const KEY = "temp-trainer-v1";
+const $ = id => document.getElementById(id);
+const fmt = n => (Math.round(n * 10) / 10).toString().replace("-", "−");
+
+let state = load();
+let q = null, answered = false;
+
+function load() {
+  try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.mode) return s; } catch (e) {}
+  return { mode: "cf", history: { cf: [], fc: [] } };
+}
+function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
+
+function newQuestion() {
+  const m = MODES[state.mode];
+  const [lo, hi] = m.range;
+  const value = lo + Math.floor(Math.random() * (hi - lo + 1));
+  q = { value, exact: m.convert(value) };
+  answered = false;
+  $("temp").textContent = fmt(value) + m.from;
+  $("prompt").textContent = `Convert to ${m.to}`;
+  $("guess").value = "";
+  $("guess").disabled = false;
+  $("go").textContent = "Check";
+  $("result").innerHTML = "";
+  $("guess").focus();
+}
+
+function render() {
+  const m = MODES[state.mode];
+  $("formula").textContent = m.formula;
+  $("trick").textContent = m.trick;
+  $("m-cf").classList.toggle("active", state.mode === "cf");
+  $("m-fc").classList.toggle("active", state.mode === "fc");
+  $("mode-label").textContent = `Stats for ${m.from} → ${m.to}`;
+
+  const h = state.history[state.mode];
+  $("s-n").textContent = h.length;
+  $("s-avg").textContent = h.length ? fmt(h.reduce((a, b) => a + b, 0) / h.length) + "°" : "–";
+  $("s-close").textContent = h.length ? Math.round(100 * h.filter(e => e <= 3).length / h.length) + "%" : "–";
+  let streak = 0;
+  for (let i = h.length - 1; i >= 0 && h[i] <= 3; i--) streak++;
+  $("s-streak").textContent = streak;
+
+  const recent = h.slice(-30);
+  const max = Math.max(10, ...recent);
+  $("history").innerHTML = recent.map(e =>
+    `<i class="${cls(e)}" style="height:${Math.max(5, e / max * 100)}%" title="${fmt(e)}° off"></i>`).join("");
+}
+
+const cls = e => e <= 1 ? "good" : e <= 3 ? "good" : e <= 6 ? "ok" : "bad";
+
+function check() {
+  const guess = parseFloat($("guess").value.replace("−", "-"));
+  if (Number.isNaN(guess)) return;
+  const m = MODES[state.mode];
+  const err = Math.abs(guess - q.exact);
+  const signed = guess - q.exact;
+  state.history[state.mode].push(Math.round(err * 10) / 10);
+  save();
+
+  let verdict;
+  if (err <= 0.5) verdict = "Spot on!";
+  else if (err <= 1.5) verdict = "So close!";
+  else if (err <= 3) verdict = "Pretty good";
+  else if (err <= 6) verdict = "Getting there";
+  else verdict = "Way off";
+
+  const dir = signed > 0 ? "too high" : "too low";
+  $("result").innerHTML =
+    `<div class="verdict ${cls(err)}">${verdict}${err > 0.5 ? ` — ${fmt(err)}° off` : ""}</div>` +
+    `<div class="detail">${fmt(q.value)}${m.from} = <b>${fmt(q.exact)}${m.to}</b>` +
+    (err > 0.5 ? ` · you were ${dir}` : "") + `</div>`;
+  answered = true;
+  $("guess").disabled = true;
+  $("go").textContent = "Next";
+  $("go").focus();
+  render();
+}
+
+$("form").addEventListener("submit", e => {
+  e.preventDefault();
+  answered ? newQuestion() : check();
+});
+function setMode(mode) {
+  state.mode = mode; save(); render(); newQuestion();
+}
+$("m-cf").onclick = () => setMode("cf");
+$("m-fc").onclick = () => setMode("fc");
+$("reset").onclick = () => {
+  if (confirm("Reset all stats?")) { state.history = { cf: [], fc: [] }; save(); render(); }
+};
+
+render();
+newQuestion();
+</script>
+</body>
+</html>
