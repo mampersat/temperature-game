@@ -59,6 +59,8 @@
   .note { min-height: 1.4em; margin: -8px 0 8px; color: var(--accent); font-weight: 600; font-size: .9rem; }
   .note a { color: inherit; text-decoration: underline dotted; }
   .note a:hover { text-decoration: underline; }
+  footer { text-align: center; font-size: .8rem; }
+  footer a { color: var(--muted); }
   .answer { display: flex; gap: 8px; justify-content: center; }
   input {
     font: inherit; font-size: 1.4rem; width: 8em; text-align: center; padding: 8px;
@@ -115,25 +117,37 @@
     <div class="history" id="history" title="Recent errors (newest on right)"></div>
     <div class="foot"><span id="mode-label"></span><button id="reset">Reset stats</button></div>
   </div>
+  <footer><a href="https://github.com/mampersat/temperature-game" target="_blank" rel="noopener noreferrer">Source on GitHub</a></footer>
 </main>
 
 <script>
 const W = "https://en.wikipedia.org/wiki/";
+// Landmark questions: c / f are the whole-number values asked in each direction; w weights the random pick.
+const LANDMARKS = [
+  { c: 0,   f: 32,   w: 3, label: "❄ Freezing point of water", url: W + "Melting_point" },
+  { c: 100, f: 212,  w: 3, label: "♨ Boiling point of water", url: W + "Boiling_point" },
+  { c: 21,  f: 70,   w: 3, label: "🏠 Room temperature", cLabel: "🏠 Room temperature (about 70°F)", url: W + "Room_temperature" },
+  { c: 37,  f: 98.6, w: 1, label: "🧍 Human body temperature", url: W + "Human_body_temperature" },
+  { c: 74,  f: 165,  w: 1, label: "🍗 Chicken is safe to eat", cLabel: "🍗 Chicken is safe to eat (about 165°F)", url: W + "Food_safety" },
+  { c: 4,   f: 40,   w: 1, label: "🧊 Inside a fridge", cLabel: "🧊 Inside a fridge (about 40°F)", url: W + "Refrigerator" },
+  { c: 38,  f: 100,  w: 1, label: "☀ A hot day", cLabel: "☀ A hot day (about 100°F)", url: W + "Heat_wave" },
+  { c: 54,  f: 130,  w: 1, label: "🥩 Medium-rare steak", cLabel: "🥩 Medium-rare steak (about 130°F)", url: W + "Doneness" },
+  { c: 40,  f: 104,  w: 1, label: "🚿 A hot shower", url: W + "Shower" },
+];
+const marksFor = k => LANDMARKS.map(l => ({ value: l[k], w: l.w, url: l.url, label: (k === "c" && l.cLabel) || l.label }));
 const MODES = {
   cf: {
     from: "°C", to: "°F", range: [-25, 45],
     formula: "°F = °C × 9/5 + 32",
     trick: "Shortcut: double it, subtract 10%, add 32 (or just double + 30 for a rough guess)",
-    marks: [{ value: 0, label: "❄ Freezing point of water", url: W + "Melting_point" }, { value: 100, label: "♨ Boiling point of water", url: W + "Boiling_point" },
-      { value: 21, label: "🏠 Room temperature (about 70°F)", url: W + "Room_temperature" }],
+    marks: marksFor("c"),
     convert: c => c * 9 / 5 + 32,
   },
   fc: {
     from: "°F", to: "°C", range: [-10, 115],
     formula: "°C = (°F − 32) × 5/9",
     trick: "Shortcut: subtract 30, then halve it (a bit high) — or subtract 32, halve, minus 10%",
-    marks: [{ value: 32, label: "❄ Freezing point of water", url: W + "Melting_point" }, { value: 212, label: "♨ Boiling point of water", url: W + "Boiling_point" },
-      { value: 70, label: "🏠 Room temperature", url: W + "Room_temperature" }],
+    marks: marksFor("f"),
     convert: f => (f - 32) * 5 / 9,
   },
 };
@@ -214,11 +228,16 @@ function load() {
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
 
+function pickWeighted(items) {
+  let r = Math.random() * items.reduce((a, i) => a + i.w, 0);
+  return items.find(i => (r -= i.w) < 0) || items[items.length - 1];
+}
+
 function newQuestion() {
   const m = MODES[state.mode];
   const [lo, hi] = m.range;
-  // ~1 in 6 questions is a landmark (freezing, boiling, room temperature)
-  const mark = Math.random() < 1 / 6 ? m.marks[Math.floor(Math.random() * m.marks.length)] : null;
+  // ~1 in 6 questions is a landmark (see LANDMARKS)
+  const mark = Math.random() < 1 / 6 ? pickWeighted(m.marks) : null;
   const value = mark ? mark.value : lo + Math.floor(Math.random() * (hi - lo + 1));
   $("note").innerHTML = mark ? `<a href="${mark.url}" target="_blank" rel="noopener noreferrer">${mark.label}</a>` : "";
   q = { value, exact: m.convert(value) };
