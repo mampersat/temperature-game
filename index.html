@@ -23,7 +23,26 @@
     font: 16px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
     display: flex; justify-content: center; padding: 16px;
   }
-  main { width: 100%; max-width: 520px; display: grid; gap: 14px; }
+  main { width: 100%; max-width: 700px; display: grid; gap: 14px; }
+  .play { display: grid; grid-template-columns: 96px minmax(0, 1fr) 96px; gap: 10px; align-items: stretch; }
+  .thermo { text-align: center; display: flex; flex-direction: column; align-items: center; }
+  .thermo svg { width: 100%; height: auto; max-height: 330px; }
+  .thermo .glass { fill: var(--bg); stroke: var(--muted); stroke-width: 2; }
+  .thermo .fluid { fill: #e02b2b; }
+  .thermo .tick { stroke: var(--muted); stroke-width: 1.5; }
+  .thermo .tick.minor { stroke-width: 1; opacity: .6; }
+  .thermo text { fill: var(--muted); font-size: 11px; }
+  .thermo .actual { stroke: var(--good); stroke-width: 2.5; }
+  .thermo .actual-tri { fill: var(--good); }
+  .thermo .unit { font-weight: 700; font-size: 1.1rem; }
+  .thermo .cap { font-size: .8rem; color: var(--muted); min-height: 2.6em; }
+  .thermo .cap b.g { color: var(--good); }
+  @media (max-width: 560px) {
+    .play { grid-template-columns: 68px minmax(0, 1fr) 68px; gap: 6px; }
+    .temp { font-size: 2.4rem !important; }
+    input { width: 5.5em !important; }
+    .thermo text { font-size: 13px; }
+  }
   .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
   .formula { text-align: center; }
   .formula .main { font-size: 1.25rem; font-weight: 600; }
@@ -37,6 +56,9 @@
   .question { text-align: center; }
   .prompt { color: var(--muted); font-size: .9rem; }
   .temp { font-size: 3.5rem; font-weight: 700; margin: 4px 0 12px; }
+  .note { min-height: 1.4em; margin: -8px 0 8px; color: var(--accent); font-weight: 600; font-size: .9rem; }
+  .note a { color: inherit; text-decoration: underline dotted; }
+  .note a:hover { text-decoration: underline; }
   .answer { display: flex; gap: 8px; justify-content: center; }
   input {
     font: inherit; font-size: 1.4rem; width: 8em; text-align: center; padding: 8px;
@@ -68,14 +90,19 @@
     <button id="m-fc">°F → °C</button>
   </div>
 
-  <div class="card question">
-    <div class="prompt" id="prompt"></div>
-    <div class="temp" id="temp"></div>
-    <form class="answer" id="form">
-      <input id="guess" type="text" inputmode="decimal" autocomplete="off" autofocus>
-      <button class="primary" id="go">Check</button>
-    </form>
-    <div class="result" id="result"></div>
+  <div class="play">
+    <div class="thermo" id="th-c"></div>
+    <div class="card question">
+      <div class="prompt" id="prompt"></div>
+      <div class="temp" id="temp"></div>
+      <div class="note" id="note"></div>
+      <form class="answer" id="form">
+        <input id="guess" type="text" inputmode="decimal" autocomplete="off" autofocus>
+        <button class="primary" id="go">Check</button>
+      </form>
+      <div class="result" id="result"></div>
+    </div>
+    <div class="thermo" id="th-f"></div>
   </div>
 
   <div class="card">
@@ -91,17 +118,22 @@
 </main>
 
 <script>
+const W = "https://en.wikipedia.org/wiki/";
 const MODES = {
   cf: {
     from: "°C", to: "°F", range: [-25, 45],
     formula: "°F = °C × 9/5 + 32",
     trick: "Shortcut: double it, subtract 10%, add 32 (or just double + 30 for a rough guess)",
+    marks: [{ value: 0, label: "❄ Freezing point of water", url: W + "Melting_point" }, { value: 100, label: "♨ Boiling point of water", url: W + "Boiling_point" },
+      { value: 21, label: "🏠 Room temperature (about 70°F)", url: W + "Room_temperature" }],
     convert: c => c * 9 / 5 + 32,
   },
   fc: {
     from: "°F", to: "°C", range: [-10, 115],
     formula: "°C = (°F − 32) × 5/9",
     trick: "Shortcut: subtract 30, then halve it (a bit high) — or subtract 32, halve, minus 10%",
+    marks: [{ value: 32, label: "❄ Freezing point of water", url: W + "Melting_point" }, { value: 212, label: "♨ Boiling point of water", url: W + "Boiling_point" },
+      { value: 70, label: "🏠 Room temperature", url: W + "Room_temperature" }],
     convert: f => (f - 32) * 5 / 9,
   },
 };
@@ -112,16 +144,83 @@ const fmt = n => (Math.round(n * 10) / 10).toString().replace("-", "−");
 let state = load();
 let q = null, answered = false;
 
+// Both thermometers span the same physical range so equal temperatures sit at equal heights.
+const THERMO = {
+  c: { unit: "°C", min: -30, max: 110, first: -30, step: 10, outer: "left" },
+  f: { unit: "°F", min: -22, max: 230, first: -20, step: 20, outer: "right" },
+};
+const TOP = 20, BOT = 255, CX = 50, BULB_Y = 284, BULB_R = 18, HALF = 8;
+const yOf = (k, t) => {
+  const s = THERMO[k];
+  return TOP + (s.max - Math.min(s.max, Math.max(s.min, t))) / (s.max - s.min) * (BOT - TOP);
+};
+
+// level: temperature the fluid rises to (null = empty); actual: temperature of the green marker (or null)
+function thermoSvg(k, level, actual, labels = true) {
+  const s = THERMO[k], left = s.outer === "left";
+  const yb = BULB_Y - Math.sqrt(BULB_R ** 2 - HALF ** 2);
+  let g = `<path class="glass" d="M${CX - HALF},${TOP} a${HALF},${HALF} 0 0 1 ${2 * HALF},0 V${yb} ` +
+          `A${BULB_R},${BULB_R} 0 1 1 ${CX - HALF},${yb} Z"/>`;
+  for (let t = s.first; t <= s.max; t += s.step) {
+    for (const [tt, minor] of [[t, false], [t + s.step / 2, true]]) {
+      if (tt > s.max) continue;
+      const y = yOf(k, tt).toFixed(1);
+      const a = left ? CX - HALF - (minor ? 4 : 8) : CX + HALF, b = left ? CX - HALF : CX + HALF + (minor ? 4 : 8);
+      g += `<line class="tick${minor ? " minor" : ""}" x1="${a}" x2="${b}" y1="${y}" y2="${y}"/>`;
+      if (!minor && labels) g += `<text x="${left ? CX - HALF - 11 : CX + HALF + 11}" y="${+y + 4}" text-anchor="${left ? "end" : "start"}">${String(tt).replace("-", "−")}</text>`;
+    }
+  }
+  if (level != null) {
+    const y = yOf(k, level);
+    g += `<rect class="fluid" x="${CX - 5}" y="${y.toFixed(1)}" width="10" height="${BULB_Y - y}"/>` +
+         `<circle class="fluid" cx="${CX}" cy="${BULB_Y}" r="${BULB_R - 4.5}"/>`;
+  }
+  if (actual != null) {
+    const y = yOf(k, actual).toFixed(1);
+    const tri = left ? `${CX + HALF + 2},${y} ${CX + HALF + 13},${y - 6} ${CX + HALF + 13},${+y + 6}`
+                     : `${CX - HALF - 2},${y} ${CX - HALF - 13},${y - 6} ${CX - HALF - 13},${+y + 6}`;
+    g += `<line class="actual" x1="${CX - HALF - 3}" x2="${CX + HALF + 3}" y1="${y}" y2="${y}"/>` +
+         `<polygon class="actual-tri" points="${tri}"/>`;
+  }
+  return `<svg viewBox="0 0 100 310" role="img" aria-label="${s.unit} thermometer">${g}</svg>`;
+}
+
+function drawThermos() {
+  const fromK = state.mode === "cf" ? "c" : "f", toK = fromK === "c" ? "f" : "c";
+  const levels = { c: null, f: null }, actuals = { c: null, f: null }, caps = { c: "", f: "" };
+  levels[fromK] = q.value;
+  caps[fromK] = `Given<br><b>${fmt(q.value)}${THERMO[fromK].unit}</b>`;
+  if (answered) {
+    levels[toK] = q.guess;
+    actuals[toK] = q.exact;
+    caps[toK] = `You: <b>${fmt(q.guess)}${THERMO[toK].unit}</b><br>Actual: <b class="g">${fmt(q.exact)}${THERMO[toK].unit}</b>`;
+  }
+  for (const k of ["c", "f"]) {
+    $("th-" + k).innerHTML = thermoSvg(k, levels[k], actuals[k], k === fromK || answered) +
+      `<div class="unit">${THERMO[k].unit}</div><div class="cap">${caps[k]}</div>`;
+  }
+}
+
 function load() {
-  try { const s = JSON.parse(localStorage.getItem(KEY)); if (s && s.mode) return s; } catch (e) {}
-  return { mode: "cf", history: { cf: [], fc: [] } };
+  try {
+    const s = JSON.parse(localStorage.getItem(KEY));
+    if (s && s.mode) {
+      // older saves kept separate histories per direction; merge them
+      if (!Array.isArray(s.history)) s.history = [...(s.history?.cf || []), ...(s.history?.fc || [])];
+      return s;
+    }
+  } catch (e) {}
+  return { mode: "cf", history: [] };
 }
 function save() { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {} }
 
 function newQuestion() {
   const m = MODES[state.mode];
   const [lo, hi] = m.range;
-  const value = lo + Math.floor(Math.random() * (hi - lo + 1));
+  // ~1 in 6 questions is a landmark (freezing, boiling, room temperature)
+  const mark = Math.random() < 1 / 6 ? m.marks[Math.floor(Math.random() * m.marks.length)] : null;
+  const value = mark ? mark.value : lo + Math.floor(Math.random() * (hi - lo + 1));
+  $("note").innerHTML = mark ? `<a href="${mark.url}" target="_blank" rel="noopener noreferrer">${mark.label}</a>` : "";
   q = { value, exact: m.convert(value) };
   answered = false;
   $("temp").textContent = fmt(value) + m.from;
@@ -131,6 +230,7 @@ function newQuestion() {
   $("go").textContent = "Check";
   $("result").innerHTML = "";
   $("guess").focus();
+  drawThermos();
 }
 
 function render() {
@@ -139,9 +239,9 @@ function render() {
   $("trick").textContent = m.trick;
   $("m-cf").classList.toggle("active", state.mode === "cf");
   $("m-fc").classList.toggle("active", state.mode === "fc");
-  $("mode-label").textContent = `Stats for ${m.from} → ${m.to}`;
+  $("mode-label").textContent = "Stats cover both directions";
 
-  const h = state.history[state.mode];
+  const h = state.history;
   $("s-n").textContent = h.length;
   $("s-avg").textContent = h.length ? fmt(h.reduce((a, b) => a + b, 0) / h.length) + "°" : "–";
   $("s-close").textContent = h.length ? Math.round(100 * h.filter(e => e <= 3).length / h.length) + "%" : "–";
@@ -163,7 +263,7 @@ function check() {
   const m = MODES[state.mode];
   const err = Math.abs(guess - q.exact);
   const signed = guess - q.exact;
-  state.history[state.mode].push(Math.round(err * 10) / 10);
+  state.history.push(Math.round(err * 10) / 10);
   save();
 
   let verdict;
@@ -179,6 +279,8 @@ function check() {
     `<div class="detail">${fmt(q.value)}${m.from} = <b>${fmt(q.exact)}${m.to}</b>` +
     (err > 0.5 ? ` · you were ${dir}` : "") + `</div>`;
   answered = true;
+  q.guess = guess;
+  drawThermos();
   $("guess").disabled = true;
   $("go").textContent = "Next";
   $("go").focus();
@@ -195,7 +297,7 @@ function setMode(mode) {
 $("m-cf").onclick = () => setMode("cf");
 $("m-fc").onclick = () => setMode("fc");
 $("reset").onclick = () => {
-  if (confirm("Reset all stats?")) { state.history = { cf: [], fc: [] }; save(); render(); }
+  if (confirm("Reset all stats?")) { state.history = []; save(); render(); }
 };
 
 render();
