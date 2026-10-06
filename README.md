@@ -2,6 +2,8 @@
 
 A small web game for learning Celsius ↔ Fahrenheit conversions well enough to estimate them by memory.
 
+![Screenshot of a game in progress, showing a chicken-temperature question after a guess](screenshot.png)
+
 ## Play
 
 Open `index.html` in a browser, or serve the folder:
